@@ -20,6 +20,31 @@
     return String(str).replace(/\d/g, (d) => map[parseInt(d, 10)]);
   }
 
+  // Exact price extraction for food titles (handles strings with weights, egg counts, etc.)
+  function extractPriceFromFoodString(str) {
+    if (!str) return 0;
+    const eng = persianToEnglishDigits(String(str));
+
+    // Match numbers directly before ریال or ريال
+    // Example: "صبحانه هفتگي ( شير 100 گرمي ) ( 600,000 ريال)" -> 600000
+    const match = eng.match(/([\d,]+)\s*(?:ریال|ريال)/);
+    if (match) {
+      const numStr = match[1].replace(/,/g, '').trim();
+      const val = parseInt(numStr, 10);
+      if (!isNaN(val) && val > 0) return val;
+    }
+
+    // Match number inside the last parentheses: ( 600,000 )
+    const matchParen = eng.match(/\(\s*([\d,]+)\s*(?:ریال|ريال)?\s*\)\s*$/);
+    if (matchParen) {
+      const numStr = matchParen[1].replace(/,/g, '').trim();
+      const val = parseInt(numStr, 10);
+      if (!isNaN(val) && val > 0) return val;
+    }
+
+    return 0;
+  }
+
   function parsePrice(str) {
     if (!str) return 0;
     const eng = persianToEnglishDigits(String(str));
@@ -160,7 +185,6 @@
       const root = document.createElement('div');
       root.id = 'sups-pool-root';
 
-      // Collapsed launcher pill (visible by default)
       root.innerHTML = `
         <div class="sups-floating-pill" id="supsPoolLauncher" title="باز کردن پنل رزرو خودکار استخر">
           <span class="sups-pill-icon">🏊‍♂️</span>
@@ -569,7 +593,7 @@
 
     // State
     let activeDayIndex = 0;
-    // Map of key `${dayIndex}_${mealIndex}` => { restaurantId, foodId, foodName, price, progDate, dayName, mealName }
+    // Map of unique key `${progDate}_${mealIndex}` => order item
     const selectedOrders = {};
     // Cache for food API: `${progDate}_${restaurantId}_${mealIndex}` => food array
     const foodCache = {};
@@ -592,16 +616,15 @@
       const todayProg = getTodayProgDate();
       if (!todayProg) return false;
 
-      // If the day is already in the past or is today:
+      // If already in the past or today:
       if (dayProgDate <= todayProg) {
         return true;
       }
 
-      // If the day is tomorrow: check if local time >= 13:00 (1 PM)
+      // If tomorrow: check if local time >= 13:00 (1 PM)
       const now = new Date();
       const currentHour = now.getHours();
 
-      // Check if dayProgDate is tomorrow
       const isTomorrow = (dayProgDate - todayProg === 1) || (dayProgDate % 100 === 1 && todayProg % 100 >= 29);
       if (isTomorrow && currentHour >= 13) {
         return true;
@@ -620,10 +643,28 @@
         const dateMatch = engText.match(/(\d{4}\/\d{2}\/\d{2})/);
         const rawDate = dateMatch ? dateMatch[1] : '';
         const progDate = rawDate.replace(/\//g, '');
-        const nameMatch = rawText.match(/^([^\d\n\r/]+)/);
-        const dayName = nameMatch ? nameMatch[1].trim() : `روز ${i + 1}`;
 
-        // Format day title like "شنبه ۲۵" instead of "شنبه 1405"
+        let dayName = 'روز ' + (i + 1);
+        const rawLower = rawText.replace(/\s+/g, ' ');
+        if (rawLower.includes('یک شنبه') || rawLower.includes('یکشنبه')) dayName = 'یک‌شنبه';
+        else if (rawLower.includes('دو شنبه') || rawLower.includes('دوشنبه')) dayName = 'دوشنبه';
+        else if (rawLower.includes('سه شنبه') || rawLower.includes('سه‌شنبه')) dayName = 'سه‌شنبه';
+        else if (rawLower.includes('چهار شنبه') || rawLower.includes('چهارشنبه')) dayName = 'چهارشنبه';
+        else if (rawLower.includes('پنج شنبه') || rawLower.includes('پنج‌شنبه')) dayName = 'پنج‌شنبه';
+        else if (rawLower.includes('شنبه')) dayName = 'شنبه';
+        else if (rawLower.includes('جمعه')) dayName = 'جمعه';
+
+        // Short 2-char name for 7-column grid
+        let dayShortName = dayName;
+        if (dayName === 'یک‌شنبه') dayShortName = '۱ش';
+        else if (dayName === 'دوشنبه') dayShortName = '۲ش';
+        else if (dayName === 'سه‌شنبه') dayShortName = '۳ش';
+        else if (dayName === 'چهارشنبه') dayShortName = '۴ش';
+        else if (dayName === 'پنج‌شنبه') dayShortName = '۵ش';
+        else if (dayName === 'شنبه') dayShortName = 'شنبه';
+        else if (dayName === 'جمعه') dayShortName = 'جمعه';
+
+        // Day of month: e.g. "1405/07/28" -> 28
         const parts = rawDate.split('/');
         const dayOfMonth = parts[2] ? parseInt(parts[2], 10) : '';
         const dayOfMonthPersian = dayOfMonth !== '' ? englishToPersianDigits(dayOfMonth) : '';
@@ -632,6 +673,7 @@
         days.push({
           index: i,
           dayName,
+          dayShortName,
           dayTitle,
           dayOfMonthPersian,
           rawDate,
@@ -685,6 +727,45 @@
       };
     }
 
+    // Find the first modifiable upcoming day (e.g. tomorrow before 13:00, or Tuesday)
+    function findFirstModifiableDayIndex(days) {
+      for (let i = 0; i < days.length; i++) {
+        const day = days[i];
+        if (isDateOrTimeExpired(day.progDate)) continue;
+        for (let m = 0; m < 3; m++) {
+          const st = getMealSlotStatus(day, m);
+          if (st.isSuccess || (!st.isExpired && !st.isUnscheduled)) {
+            return i;
+          }
+        }
+      }
+      // Fallback
+      for (let i = 0; i < days.length; i++) {
+        if (!isDateOrTimeExpired(days[i].progDate)) return i;
+      }
+      return 0;
+    }
+
+    // Persist selected orders to chrome.storage.local
+    function saveOrders() {
+      chrome.storage.local.set({
+        sups_saved_orders: selectedOrders,
+        sups_saved_timestamp: Date.now()
+      });
+    }
+
+    function loadSavedOrders(callback) {
+      chrome.storage.local.get(['sups_saved_orders', 'sups_saved_timestamp'], (data) => {
+        if (data && data.sups_saved_orders) {
+          // Keep selections within 48 hours
+          if (Date.now() - (data.sups_saved_timestamp || 0) < 48 * 60 * 60 * 1000) {
+            Object.assign(selectedOrders, data.sups_saved_orders);
+          }
+        }
+        if (callback) callback();
+      });
+    }
+
     // Fetch foods from SUPS Ajax API
     async function fetchFoods(progDate, restaurantId, mealIndex) {
       const cacheKey = `${progDate}_${restaurantId}_${mealIndex}`;
@@ -713,7 +794,7 @@
             if (parts.length >= 2) {
               const foodId = parts[0];
               const rawTitle = parts[1].trim();
-              const price = parsePrice(rawTitle);
+              const price = extractPriceFromFoodString(rawTitle);
               foods.push({
                 foodId,
                 rawTitle,
@@ -752,8 +833,16 @@
             <button class="sups-btn-icon" id="supsFoodCloseBtn" title="بستن / کوچک کردن">✕</button>
           </div>
 
+          <!-- Week Navigation Header (Previous Week / Next Week) -->
+          <div class="sups-week-nav-bar">
+            <button type="button" class="sups-week-nav-btn" id="supsPrevWeekBtn" title="هفته قبل">هفته قبل</button>
+            <span class="sups-week-range-text" id="supsWeekRangeText">هفته انتخابی</span>
+            <button type="button" class="sups-week-nav-btn" id="supsNextWeekBtn" title="هفته بعد">هفته بعد</button>
+          </div>
+
+          <!-- 7-Column Grid Tabs (e.g. شنبه ۲۵, یک‌شنبه ۲۶) -->
           <div class="sups-food-days-tabs" id="supsFoodDaysTabs">
-            <!-- Rendered dynamically (e.g. شنبه ۲۵, یک‌شنبه ۲۶) -->
+            <!-- Rendered dynamically -->
           </div>
 
           <div class="sups-food-day-content" id="supsFoodDayContent">
@@ -807,12 +896,42 @@
       document.getElementById('supsClearSelectionsBtn').addEventListener('click', () => {
         if (confirm('تمام انتخاب‌های انجام‌شده پاک شوند؟')) {
           for (const k in selectedOrders) delete selectedOrders[k];
+          saveOrders();
           renderWizard();
         }
       });
 
-      // Check if user has just returned from online payment
-      checkPostPaymentResume();
+      // Next / Previous Week Navigation buttons
+      document.getElementById('supsNextWeekBtn').addEventListener('click', () => {
+        const nextBtn = document.getElementById('btnNextWeek');
+        if (nextBtn) {
+          nextBtn.click();
+          setTimeout(() => {
+            const days = parseWeekDays();
+            activeDayIndex = findFirstModifiableDayIndex(days);
+            renderWizard();
+          }, 600);
+        }
+      });
+
+      document.getElementById('supsPrevWeekBtn').addEventListener('click', () => {
+        const prevBtn = document.getElementById('btnPrevWeek');
+        if (prevBtn) {
+          prevBtn.click();
+          setTimeout(() => {
+            const days = parseWeekDays();
+            activeDayIndex = findFirstModifiableDayIndex(days);
+            renderWizard();
+          }, 600);
+        }
+      });
+
+      // Load persistent orders and select first modifiable day
+      loadSavedOrders(() => {
+        const days = parseWeekDays();
+        activeDayIndex = findFirstModifiableDayIndex(days);
+        checkPostPaymentResume();
+      });
     }
 
     function renderWizard() {
@@ -823,7 +942,19 @@
       const creditTag = document.getElementById('supsFoodCreditTag');
       if (creditTag) creditTag.textContent = `موجودی: ${formatPriceRials(credit)}`;
 
-      // Render Day Tabs with "شنبه ۲۵" format
+      // Update week range label from page
+      const edDesc = document.getElementById('edDesc');
+      const rangeEl = document.getElementById('supsWeekRangeText');
+      if (rangeEl && edDesc) {
+        const match = edDesc.innerText.match(/از تاریخ\s+([^\s]+)\s+([\d/]+)\s+الی\s+تاریخ\s+([^\s]+)\s+([\d/]+)/);
+        if (match) {
+          rangeEl.textContent = `${englishToPersianDigits(match[2])} الی ${englishToPersianDigits(match[4])}`;
+        } else {
+          rangeEl.textContent = edDesc.innerText.replace('خرید ژتون از تاریخ', '').trim();
+        }
+      }
+
+      // Render 7-column Grid Tabs
       const tabsContainer = document.getElementById('supsFoodDaysTabs');
       tabsContainer.innerHTML = '';
       days.forEach((day, idx) => {
@@ -831,14 +962,15 @@
         btn.type = 'button';
         btn.className = `sups-day-tab ${idx === activeDayIndex ? 'active' : ''}`;
 
-        // Count selected meals for this day
+        // Count selected meals for this specific day
         let dayCount = 0;
         for (let m = 0; m < 3; m++) {
-          if (selectedOrders[`${idx}_${m}`]) dayCount++;
+          if (selectedOrders[`${day.progDate}_${m}`]) dayCount++;
         }
 
         btn.innerHTML = `
-          <span class="day-name">${day.dayTitle}</span>
+          <span class="day-short">${day.dayShortName}</span>
+          <span class="day-num">${day.dayOfMonthPersian}</span>
           ${dayCount > 0 ? `<span class="day-badge">${englishToPersianDigits(dayCount)}</span>` : ''}
         `;
         btn.addEventListener('click', () => {
@@ -882,7 +1014,7 @@
 
       // Render each meal
       MEALS.forEach((meal, mealIdx) => {
-        const mealKey = `${activeDayIndex}_${meal.index}`;
+        const mealKey = `${activeDay.progDate}_${meal.index}`;
         const selected = selectedOrders[mealKey];
         const status = dayMealStatuses[mealIdx];
 
@@ -967,10 +1099,12 @@
 
             if (isSkip) {
               delete selectedOrders[mealKey];
+              saveOrders();
               foodBox.innerHTML = '';
               statusTag.textContent = 'اسکیپ شده';
               card.classList.remove('has-selection');
               updateSummary();
+              renderWizard();
               return;
             }
 
@@ -1003,6 +1137,7 @@
                   mealName: meal.name,
                   mealIndex: meal.index
                 };
+                saveOrders();
                 card.classList.add('has-selection');
                 statusTag.textContent = `${f.rawTitle}`;
                 renderWizard();
@@ -1036,6 +1171,7 @@
                   mealName: meal.name,
                   mealIndex: meal.index
                 };
+                saveOrders();
                 renderWizard();
               });
               foodBox.appendChild(foodRow);
@@ -1100,7 +1236,9 @@
         return;
       }
 
+      // Mark that we are waiting for payment and persist selections
       chrome.storage.local.set({
+        sups_saved_orders: selectedOrders,
         sups_pending_orders: orders,
         sups_waiting_payment: true,
         sups_order_timestamp: Date.now()
@@ -1119,7 +1257,7 @@
 
     // Check if user came back from payment
     function checkPostPaymentResume() {
-      chrome.storage.local.get(['sups_pending_orders', 'sups_waiting_payment', 'sups_order_timestamp'], (data) => {
+      chrome.storage.local.get(['sups_pending_orders', 'sups_waiting_payment', 'sups_order_timestamp', 'sups_saved_orders'], (data) => {
         if (!data || !data.sups_waiting_payment || !data.sups_pending_orders || data.sups_pending_orders.length === 0) {
           return;
         }
@@ -1175,7 +1313,10 @@
           progDiv.textContent = msg;
         });
 
-        chrome.storage.local.remove(['sups_pending_orders', 'sups_waiting_payment', 'sups_order_timestamp']);
+        // Clear state
+        chrome.storage.local.remove(['sups_pending_orders', 'sups_waiting_payment', 'sups_order_timestamp', 'sups_saved_orders']);
+        for (const k in selectedOrders) delete selectedOrders[k];
+
         progDiv.textContent = 'رزروها با موفقیت انجام شد! در حال بارگذاری مجدد...';
         setTimeout(() => {
           window.location.reload();
@@ -1228,6 +1369,10 @@
         title: '🍱 رزرو ژتون تغذیه پایان یافت',
         body: `${successCount} وعده با موفقیت ثبت شد.`
       });
+
+      // Clear orders that were successfully reserved
+      chrome.storage.local.remove(['sups_pending_orders', 'sups_waiting_payment', 'sups_order_timestamp', 'sups_saved_orders']);
+      for (const k in selectedOrders) delete selectedOrders[k];
 
       if (!onProgress) {
         alert(`عملیات رزرو به پایان رسید:\nموفق: ${successCount}\nناموفق: ${failCount}`);
