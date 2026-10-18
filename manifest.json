@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Shiraz Pool Auto-Reserve",
-  "version": "1.1.0",
-  "description": "Fast auto-reservation bot for Shiraz University pool slots",
+  "name": "sups shirazu",
+  "version": "2.0.0",
+  "description": "سامانه رزرو سریع استخر و ژتون تغذیه دانشگاه شیراز (sups.shirazu.ac.ir)",
   "author": "Raman Tondro",
   "homepage_url": "https://github.com/RMNO21/shirazu-pool-reserve",
   "icons": {
@@ -12,7 +12,7 @@
   },
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "Shiraz Pool Auto-Reserve"
+    "default_title": "sups shirazu"
   },
   "background": {
     "service_worker": "background.js"
