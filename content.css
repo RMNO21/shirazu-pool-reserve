@@ -550,6 +550,31 @@
   border-color: #bbf7d0;
 }
 
+.sups-meal-reserved-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sups-btn-change-meal {
+  background: #0284c7;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+  font-family: inherit;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.sups-btn-change-meal:hover {
+  background: #0369a1;
+  transform: translateY(-1px);
+}
+
 .sups-meal-single-line .meal-name {
   font-weight: 700;
   color: #334155;
@@ -590,7 +615,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .sups-meal-card.has-selection {
@@ -598,10 +623,46 @@
   background: #f0fdf4;
 }
 
+.sups-meal-card.is-modifying {
+  border-color: #38bdf8;
+  background: #f0f9ff;
+}
+
+.sups-mod-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #0284c7;
+  margin-right: 4px;
+}
+
 .sups-meal-title-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.sups-meal-title-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sups-btn-cancel-change {
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s ease;
+}
+
+.sups-btn-cancel-change:hover {
+  background: #e2e8f0;
+  color: #334155;
 }
 
 .sups-meal-title {

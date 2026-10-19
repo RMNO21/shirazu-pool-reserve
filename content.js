@@ -595,6 +595,8 @@
     let activeDayIndex = 0;
     // Map of unique key `${progDate}_${mealIndex}` => order item
     const selectedOrders = {};
+    // Set of meal keys `${progDate}_${mealIndex}` unlocked by user clicking "تغییر"
+    const modifiableMeals = new Set();
     // Cache for food API: `${progDate}_${restaurantId}_${mealIndex}` => food array
     const foodCache = {};
 
@@ -694,7 +696,7 @@
       const inputId = `Meal${day.index * 3 + mealIndex}`;
       const input = document.getElementById(inputId);
       if (!input) {
-        return { exists: false, isUnscheduled: true, isReserved: false, isExpired: false, text: '' };
+        return { exists: false, isUnscheduled: true, isReserved: false, isExpired: false, text: '', deleteIdent: '' };
       }
 
       const val = (input.value || input.title || '').trim();
@@ -704,6 +706,15 @@
 
       const isUnscheduled = val.includes('برنامه ریزی نشده') || (!isPrimary && !isSuccess && val === '');
       const isReserved = isPrimary;
+
+      // Extract DeleteMeal IdentChip parameter if present
+      // e.g. onclick="DeleteMeal('1:447716:14050728:0:1:0')"
+      let deleteIdent = '';
+      const onclickAttr = input.getAttribute('onclick') || '';
+      const delMatch = onclickAttr.match(/DeleteMeal\(['"]([^'"]+)['"]\)/);
+      if (delMatch) {
+        deleteIdent = delMatch[1];
+      }
 
       // Check if expired
       let isExpired = val.includes('پایان مهلت رزرو');
@@ -723,6 +734,7 @@
         isSuccess,
         isDisable,
         isExpired,
+        deleteIdent,
         text: val.replace(/\r?\n/g, ' - ')
       };
     }
@@ -1030,20 +1042,39 @@
           return;
         }
 
-        // 2. Single line if already reserved in SUPS portal
-        if (status.isReserved) {
+        // 2. Meal is already reserved in SUPS portal
+        // If the user hasn't clicked "تغییر" yet, render single line WITH "تغییر ✏️" button (if not expired)
+        if (status.isReserved && !modifiableMeals.has(mealKey)) {
           const row = document.createElement('div');
           row.className = 'sups-meal-single-line reserved';
+          
+          let actionBtnHtml = '';
+          if (!status.isExpired) {
+            actionBtnHtml = `<button type="button" class="sups-btn-change-meal" data-mealkey="${mealKey}">تغییر ✏️</button>`;
+          }
+
           row.innerHTML = `
             <span class="meal-name">${meal.icon} ${meal.name}</span>
-            <span class="meal-pill-tag green">رزرو شده: ${status.text}</span>
+            <div class="sups-meal-reserved-actions">
+              <span class="meal-pill-tag green">رزرو شده: ${status.text}</span>
+              ${actionBtnHtml}
+            </div>
           `;
+
+          const changeBtn = row.querySelector('.sups-btn-change-meal');
+          if (changeBtn) {
+            changeBtn.addEventListener('click', () => {
+              modifiableMeals.add(mealKey);
+              renderWizard();
+            });
+          }
+
           content.appendChild(row);
           return;
         }
 
-        // 3. Single line if meal is expired (past date, or past 13:00 for tomorrow)
-        if (status.isExpired) {
+        // 3. Single line if meal is expired (past date, or past 13:00 for tomorrow) and not in edit mode
+        if (status.isExpired && !modifiableMeals.has(mealKey)) {
           const row = document.createElement('div');
           row.className = 'sups-meal-single-line expired';
           row.innerHTML = `
@@ -1054,16 +1085,36 @@
           return;
         }
 
-        // 4. Meal is open for reservation! Show interactive selection card
+        // 4. Meal is open for reservation or currently in modification mode! Show interactive selection card
         const card = document.createElement('div');
-        card.className = `sups-meal-card ${selected ? 'has-selection' : ''}`;
+        const isModifying = status.isReserved && modifiableMeals.has(mealKey);
+        card.className = `sups-meal-card ${selected ? 'has-selection' : ''} ${isModifying ? 'is-modifying' : ''}`;
+
+        let statusText = 'بدون انتخاب';
+        if (selected) {
+          if (selected.isCancelOnly) {
+            statusText = 'درخواست لغو رزرو قبلی';
+          } else {
+            statusText = `انتخاب: ${selected.foodName}`;
+          }
+        } else if (isModifying) {
+          statusText = `رزرو فعلی: ${status.text}`;
+        }
+
+        let cancelChangeBtnHtml = '';
+        if (isModifying) {
+          cancelChangeBtnHtml = `<button type="button" class="sups-btn-cancel-change" data-mealkey="${mealKey}">انصراف از تغییر ↩</button>`;
+        }
 
         card.innerHTML = `
           <div class="sups-meal-title-bar">
-            <span class="sups-meal-title">${meal.icon} ${meal.name}</span>
-            <span class="sups-meal-status-tag" id="statusTag_${mealKey}">
-              ${selected ? `انتخاب: ${selected.foodName}` : 'بدون انتخاب'}
-            </span>
+            <span class="sups-meal-title">${meal.icon} ${meal.name} ${isModifying ? '<span class="sups-mod-badge">(در حال تغییر)</span>' : ''}</span>
+            <div class="sups-meal-title-right">
+              <span class="sups-meal-status-tag" id="statusTag_${mealKey}">
+                ${statusText}
+              </span>
+              ${cancelChangeBtnHtml}
+            </div>
           </div>
 
           <div class="sups-rest-buttons">
@@ -1072,8 +1123,8 @@
                 ${r.shortName}
               </button>
             `).join('')}
-            <button type="button" class="sups-rest-btn sups-skip-btn ${(!selected) ? 'active' : ''}" data-skip="true">
-              اسکیپ
+            <button type="button" class="sups-rest-btn sups-skip-btn ${(selected && selected.isCancelOnly) || (!selected && !isModifying) ? 'active' : ''}" data-skip="true">
+              ${isModifying ? 'حذف/لغو رزرو' : 'اسکیپ'}
             </button>
           </div>
 
@@ -1083,6 +1134,17 @@
         `;
 
         content.appendChild(card);
+
+        // Click handler for "انصراف از تغییر"
+        const cancelChangeBtn = card.querySelector('.sups-btn-cancel-change');
+        if (cancelChangeBtn) {
+          cancelChangeBtn.addEventListener('click', () => {
+            modifiableMeals.delete(mealKey);
+            delete selectedOrders[mealKey];
+            saveOrders();
+            renderWizard();
+          });
+        }
 
         // Click handlers for Restaurant / Skip buttons
         const restBtns = card.querySelectorAll('.sups-rest-btn');
@@ -1098,11 +1160,27 @@
             const statusTag = document.getElementById(`statusTag_${mealKey}`);
 
             if (isSkip) {
-              delete selectedOrders[mealKey];
+              if (isModifying) {
+                // User wants to cancel their existing reservation
+                selectedOrders[mealKey] = {
+                  isCancelOnly: true,
+                  replaceOldTicket: true,
+                  deleteIdent: status.deleteIdent,
+                  price: 0,
+                  progDate: activeDay.progDate,
+                  dayName: activeDay.dayName,
+                  mealName: meal.name,
+                  mealIndex: meal.index
+                };
+                statusTag.textContent = 'درخواست لغو رزرو قبلی';
+                card.classList.add('has-selection');
+              } else {
+                delete selectedOrders[mealKey];
+                statusTag.textContent = 'اسکیپ شده';
+                card.classList.remove('has-selection');
+              }
               saveOrders();
               foodBox.innerHTML = '';
-              statusTag.textContent = 'اسکیپ شده';
-              card.classList.remove('has-selection');
               updateSummary();
               renderWizard();
               return;
@@ -1135,7 +1213,9 @@
                   progDate: activeDay.progDate,
                   dayName: activeDay.dayName,
                   mealName: meal.name,
-                  mealIndex: meal.index
+                  mealIndex: meal.index,
+                  replaceOldTicket: isModifying,
+                  deleteIdent: isModifying ? status.deleteIdent : ''
                 };
                 saveOrders();
                 card.classList.add('has-selection');
@@ -1169,7 +1249,9 @@
                   progDate: activeDay.progDate,
                   dayName: activeDay.dayName,
                   mealName: meal.name,
-                  mealIndex: meal.index
+                  mealIndex: meal.index,
+                  replaceOldTicket: isModifying,
+                  deleteIdent: isModifying ? status.deleteIdent : ''
                 };
                 saveOrders();
                 renderWizard();
@@ -1330,10 +1412,31 @@
 
       for (let i = 0; i < orders.length; i++) {
         const item = orders[i];
-        const statusMsg = `در حال ثبت وعده ${englishToPersianDigits(i + 1)} از ${englishToPersianDigits(orders.length)}: ${item.dayName} - ${item.mealName}...`;
+        const statusMsg = `در حال اعمال وعده ${englishToPersianDigits(i + 1)} از ${englishToPersianDigits(orders.length)}: ${item.dayName} - ${item.mealName}...`;
         if (onProgress) onProgress(statusMsg);
 
         try {
+          // If this slot was previously reserved and needs deletion/replacement
+          if (item.replaceOldTicket && item.deleteIdent) {
+            try {
+              const delUrl = `/SfxWeb/Script/AjaxMember.aspx?Act=DeleteMeal&IdentChip=${encodeURIComponent(item.deleteIdent)}&Rand=${Math.random()}`;
+              await fetch(delUrl, {
+                method: 'GET',
+                credentials: 'include',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+              });
+              await new Promise(r => setTimeout(r, 200));
+            } catch (errDel) {
+              console.warn('Error deleting old ticket:', errDel);
+            }
+          }
+
+          // If the user only wanted to cancel/delete the existing reservation
+          if (item.isCancelOnly) {
+            successCount++;
+            continue;
+          }
+
           const buyUrl = `/SfxWeb/Script/AjaxMember.aspx?Act=BuyChipsWeek&Restaurant=${item.restaurantId}&ProgDate=${item.progDate}&Meal=${item.mealIndex}&Food=${item.foodId}&Dessert=&Start=&End=&Rand=${Math.random()}`;
           const res = await fetch(buyUrl, {
             method: 'GET',
